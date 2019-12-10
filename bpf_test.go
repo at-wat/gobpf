@@ -412,6 +412,26 @@ func checkCgroupProgs(t *testing.T, b *elf.Module) {
 	}
 }
 
+func checkXDPProgs(t *testing.T, b *elf.Module) {
+	if kernelVersion < kernelVersion412 {
+		t.Logf("kernel doesn't support XDP. Skipping...")
+		t.Skip()
+	}
+
+	var expectedXDPProgs = []string{
+		"xdp/prog1",
+		"xdp/prog2",
+	}
+
+	var xdpProgs []*elf.XDPProgram
+	for p := range b.IterXDPProgram() {
+		xdpProgs = append(xdpProgs, p)
+	}
+	if len(xdpProgs) != len(expectedXDPProgs) {
+		t.Fatalf("unexpected number of XDP programs. Got %d, expected %v", len(xdpProgs), len(expectedXDPProgs))
+	}
+}
+
 func checkTracepointProgs(t *testing.T, b *elf.Module) {
 	if kernelVersion < kernelVersion47 {
 		t.Logf("kernel doesn't support bpf programs for tracepoints. Skipping...")
@@ -556,13 +576,13 @@ func checkLookupElement(t *testing.T, b *elf.Module) {
 
 	key = 0
 	nextKey := 0
-	for range found {
+	for {
 		f, err := b.LookupNextElement(mp, unsafe.Pointer(&key), unsafe.Pointer(&nextKey), unsafe.Pointer(&lvalue))
 		if err != nil {
-			t.Fatal("failed trying to lookup the next element")
+			t.Fatalf("failed trying to lookup the next element: %s", err)
 		}
 		if !f {
-			t.Fatalf("unable to find key %d", key)
+			break
 		}
 
 		if nextKey != lvalue {
@@ -656,6 +676,7 @@ func TestModuleLoadELF(t *testing.T) {
 	checkCgroupProgs(t, b)
 	checkSocketFilters(t, b)
 	checkTracepointProgs(t, b)
+	checkXDPProgs(t, b)
 	checkPinConfig(t, []string{"/sys/fs/bpf/gobpf-test/testgroup1"})
 	checkUpdateDeleteElement(t, b)
 	checkLookupElement(t, b)

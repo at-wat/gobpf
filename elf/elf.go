@@ -77,7 +77,7 @@ static void bpf_apply_relocation(int fd, struct bpf_insn *insn)
 }
 
 static int bpf_create_map(enum bpf_map_type map_type, int key_size,
-	int value_size, int max_entries)
+	int value_size, int max_entries, int map_flags)
 {
 	int ret;
 	union bpf_attr attr;
@@ -87,6 +87,7 @@ static int bpf_create_map(enum bpf_map_type map_type, int key_size,
 	attr.key_size = key_size;
 	attr.value_size = value_size;
 	attr.max_entries = max_entries;
+	attr.map_flags = map_flags;
 
 	ret = syscall(__NR_bpf, BPF_MAP_CREATE, &attr, sizeof(attr));
 	if (ret < 0 && errno == EPERM) {
@@ -124,7 +125,8 @@ void create_bpf_obj_get(const char *pathname, void *attr)
 
 int get_pinned_obj_fd(const char *path)
 {
-	union bpf_attr attr = {};
+	union bpf_attr attr;
+	memset(&attr, 0, sizeof(attr));
 	create_bpf_obj_get(path, &attr);
 	return syscall(__NR_bpf, BPF_OBJ_GET, &attr, sizeof(attr));
 }
@@ -144,12 +146,14 @@ static bpf_map *bpf_load_map(bpf_map_def *map_def, const char *path)
 	switch (map_def->pinning) {
 	case 1: // PIN_OBJECT_NS
 		// TODO to be implemented
+		free(map);
 		return 0;
 	case 2: // PIN_GLOBAL_NS
 	case 3: // PIN_CUSTOM_NS
 		if (stat(path, &st) == 0) {
 			ret = get_pinned_obj_fd(path);
 			if (ret < 0) {
+				free(map);
 				return 0;
 			}
 			map->fd = ret;
@@ -161,16 +165,19 @@ static bpf_map *bpf_load_map(bpf_map_def *map_def, const char *path)
 	map->fd = bpf_create_map(map_def->type,
 		map_def->key_size,
 		map_def->value_size,
-		map_def->max_entries
+		map_def->max_entries,
+		map_def->map_flags
 	);
 
 	if (map->fd < 0) {
+		free(map);
 		return 0;
 	}
 
 	if (do_pin) {
 		ret = bpf_pin_object(map->fd, path);
 		if (ret < 0) {
+			free(map);
 			return 0;
 		}
 	}
@@ -225,12 +232,13 @@ static int bpf_prog_load(enum bpf_prog_type prog_type,
 
 static int bpf_update_element(int fd, void *key, void *value, unsigned long long flags)
 {
-	union bpf_attr attr = {
-		.map_fd = fd,
-		.key = ptr_to_u64(key),
-		.value = ptr_to_u64(value),
-		.flags = flags,
-	};
+	union bpf_attr attr;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.value = ptr_to_u64(value);
+	attr.flags = flags;
 
 	return syscall(__NR_bpf, BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
 }
@@ -357,6 +365,11 @@ func elfReadMaps(file *elf.File, params map[string]SectionParams) (map[string]*M
 			continue
 		}
 
+		name := strings.TrimPrefix(section.Name, "maps/")
+		if oldMap, ok := maps[name]; ok {
+			return nil, fmt.Errorf("duplicate map: %q and %q", oldMap.Name, name)
+		}
+
 		data, err := section.Data()
 		if err != nil {
 			return nil, err
@@ -364,8 +377,6 @@ func elfReadMaps(file *elf.File, params map[string]SectionParams) (map[string]*M
 		if len(data) != C.sizeof_struct_bpf_map_def {
 			return nil, fmt.Errorf("only one map with size %d bytes allowed per section (check bpf_map_def)", C.sizeof_struct_bpf_map_def)
 		}
-
-		name := strings.TrimPrefix(section.Name, "maps/")
 
 		mapDef := (*C.bpf_map_def)(unsafe.Pointer(&data[0]))
 
@@ -388,9 +399,6 @@ func elfReadMaps(file *elf.File, params map[string]SectionParams) (map[string]*M
 			return nil, fmt.Errorf("error while loading map %q: %v", section.Name, err)
 		}
 
-		if oldMap, ok := maps[name]; ok {
-			return nil, fmt.Errorf("duplicate map: %q and %q", oldMap.Name, name)
-		}
 		maps[name] = &Map{
 			Name: name,
 			m:    cm,
@@ -559,6 +567,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 			isTracepoint := strings.HasPrefix(secName, "tracepoint/")
 			isSchedCls := strings.HasPrefix(secName, "sched_cls/")
 			isSchedAct := strings.HasPrefix(secName, "sched_act/")
+			isXDP := strings.HasPrefix(secName, "xdp/")
 
 			var progType uint32
 			switch {
@@ -583,6 +592,8 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 				progType = uint32(C.BPF_PROG_TYPE_SCHED_CLS)
 			case isSchedAct:
 				progType = uint32(C.BPF_PROG_TYPE_SCHED_ACT)
+			case isXDP:
+				progType = uint32(C.BPF_PROG_TYPE_XDP)
 			}
 
 			// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
@@ -598,7 +609,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 				}
 			}
 
-			if isKprobe || isKretprobe || isUprobe || isUretprobe || isCgroupSkb || isCgroupSock || isSocketFilter || isTracepoint || isSchedCls || isSchedAct {
+			if isKprobe || isKretprobe || isUprobe || isUretprobe || isCgroupSkb || isCgroupSock || isSocketFilter || isTracepoint || isSchedCls || isSchedAct || isXDP {
 				rdata, err := rsection.Data()
 				if err != nil {
 					return err
@@ -670,6 +681,12 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 						insns: insns,
 						fd:    int(progFd),
 					}
+				case isXDP:
+					b.xdpPrograms[secName] = &XDPProgram{
+						Name: secName,
+						insns: insns,
+						fd: int(progFd),
+					}
 				}
 			}
 		}
@@ -695,6 +712,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 		isTracepoint := strings.HasPrefix(secName, "tracepoint/")
 		isSchedCls := strings.HasPrefix(secName, "sched_cls/")
 		isSchedAct := strings.HasPrefix(secName, "sched_act/")
+		isXDP := strings.HasPrefix(secName, "xdp/")
 
 		var progType uint32
 		switch {
@@ -718,6 +736,8 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 			progType = uint32(C.BPF_PROG_TYPE_SCHED_CLS)
 		case isSchedAct:
 			progType = uint32(C.BPF_PROG_TYPE_SCHED_ACT)
+		case isXDP:
+			progType = uint32(C.BPF_PROG_TYPE_XDP)
 		}
 
 		// If Kprobe or Kretprobe for a syscall, use correct syscall prefix in section name
@@ -733,7 +753,7 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 			}
 		}
 
-		if isKprobe || isKretprobe || isUprobe || isUretprobe || isCgroupSkb || isCgroupSock || isSocketFilter || isTracepoint || isSchedCls || isSchedAct {
+		if isKprobe || isKretprobe || isUprobe || isUretprobe || isCgroupSkb || isCgroupSock || isSocketFilter || isTracepoint || isSchedCls || isSchedAct || isXDP {
 			data, err := section.Data()
 			if err != nil {
 				return err
@@ -799,6 +819,12 @@ func (b *Module) Load(parameters map[string]SectionParams) error {
 					Name:  secName,
 					insns: insns,
 					fd:    int(progFd),
+				}
+			case isXDP:
+				b.xdpPrograms[secName] = &XDPProgram{
+					Name: secName,
+					insns: insns,
+					fd: int(progFd),
 				}
 			}
 		}
