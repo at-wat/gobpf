@@ -221,6 +221,13 @@ func NewModule(fileName string) *Module {
 	return module
 }
 
+func NewModuleWithLogSize(fileName string, logSize int) *Module {
+	module := newModule()
+	module.fileName = fileName
+	module.log = make([]byte, logSize)
+	return module
+}
+
 func NewModuleFromReader(fileReader io.ReaderAt) *Module {
 	module := newModule()
 	module.fileReader = fileReader
