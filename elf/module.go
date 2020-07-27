@@ -644,6 +644,10 @@ func (kp *Kprobe) Fd() int {
 	return kp.fd
 }
 
+func (kp *Kprobe) Efd() int {
+	return kp.efd
+}
+
 func disableKprobe(eventName string) error {
 	kprobeEventsFileName := "/sys/kernel/debug/tracing/kprobe_events"
 	f, err := os.OpenFile(kprobeEventsFileName, os.O_APPEND|os.O_WRONLY, 0)
