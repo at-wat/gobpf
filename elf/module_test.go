@@ -7,7 +7,7 @@ import (
 )
 
 func TestSetKprobeForSection(t *testing.T) {
-	module := newModule()
+	module := newModule(DefaultVerifierBufferSize)
 	module.probes["probe"] = &Kprobe{Name: "probe"}
 
 	for _, test := range []struct {
@@ -33,7 +33,7 @@ func TestSetKprobeForSection(t *testing.T) {
 }
 
 func TestEnableKprobesError(t *testing.T) {
-	module := newModule()
+	module := newModule(DefaultVerifierBufferSize)
 	module.probes["probe"] = &Kprobe{Name: "probe"}
 	module.probes["another_probe"] = &Kprobe{Name: "probe"}
 	if err := module.EnableKprobes(1); err == nil {
