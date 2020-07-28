@@ -644,8 +644,30 @@ func (kp *Kprobe) Fd() int {
 	return kp.fd
 }
 
-func (kp *Kprobe) Efd() int {
-	return kp.efd
+// Detach is used to detach a kprobe from its hook point without deleting the eBPF program. After a call to this method,
+// the kprobe can be attached again.
+func (kp *Kprobe) Detach() error {
+	if kp.efd == -1 {
+		return nil
+	}
+	if err := syscall.Close(kp.efd); err != nil {
+		return fmt.Errorf("error closing perf event fd: %v", err)
+	}
+	kp.efd = -1
+	isKretprobe := strings.HasPrefix(kp.Name, "kretprobe/")
+	var err error
+	var funcName string
+	if isKretprobe {
+		funcName = strings.TrimPrefix(kp.Name, "kretprobe/")
+		err = disableKprobe("r" + funcName)
+	} else {
+		funcName = strings.TrimPrefix(kp.Name, "kprobe/")
+		err = disableKprobe("p" + funcName)
+	}
+	if err != nil {
+		return fmt.Errorf("error clearing probe: %v", err)
+	}
+	return nil
 }
 
 func disableKprobe(eventName string) error {
@@ -723,29 +745,12 @@ func (xdpp *XDPProgram) Fd() int {
 }
 
 func (b *Module) closeProbes() error {
-	var funcName string
 	for _, probe := range b.probes {
-		if probe.efd != -1 {
-			if err := syscall.Close(probe.efd); err != nil {
-				return fmt.Errorf("error closing perf event fd: %v", err)
-			}
-			probe.efd = -1
+		if err := probe.Detach(); err != nil {
+			return fmt.Errorf("error detaching probe %s: %v", probe.Name, err)
 		}
 		if err := syscall.Close(probe.fd); err != nil {
-			return fmt.Errorf("error closing probe fd: %v", err)
-		}
-		name := probe.Name
-		isKretprobe := strings.HasPrefix(name, "kretprobe/")
-		var err error
-		if isKretprobe {
-			funcName = strings.TrimPrefix(name, "kretprobe/")
-			err = disableKprobe("r" + funcName)
-		} else {
-			funcName = strings.TrimPrefix(name, "kprobe/")
-			err = disableKprobe("p" + funcName)
-		}
-		if err != nil {
-			return fmt.Errorf("error clearing probe: %v", err)
+			return fmt.Errorf("error closing probe %s fd: %v", probe.Name, err)
 		}
 	}
 	return nil
