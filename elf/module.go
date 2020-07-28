@@ -227,7 +227,6 @@ func NewModule(fileName string) *Module {
 func NewModuleWithLogSize(fileName string, logSize int) *Module {
 	module := newModule(logSize)
 	module.fileName = fileName
-	module.log = make([]byte, logSize)
 	return module
 }
 
