@@ -202,7 +202,10 @@ type XDPProgram struct {
 	fd    int
 }
 
-func newModule() *Module {
+// DefaultVerifierBufferSize is the default size used to initialize the verifier logs buffer
+const DefaultVerifierBufferSize = 524288
+
+func newModule(bufferSize int) *Module {
 	return &Module{
 		probes:             make(map[string]*Kprobe),
 		uprobes:            make(map[string]*Uprobe),
@@ -211,25 +214,31 @@ func newModule() *Module {
 		tracepointPrograms: make(map[string]*TracepointProgram),
 		schedPrograms:      make(map[string]*SchedProgram),
 		xdpPrograms:        make(map[string]*XDPProgram),
-		log:                make([]byte, 524288),
+		log:                make([]byte, bufferSize),
 	}
 }
 
 func NewModule(fileName string) *Module {
-	module := newModule()
+	module := newModule(DefaultVerifierBufferSize)
 	module.fileName = fileName
 	return module
 }
 
 func NewModuleWithLogSize(fileName string, logSize int) *Module {
-	module := newModule()
+	module := newModule(logSize)
 	module.fileName = fileName
 	module.log = make([]byte, logSize)
 	return module
 }
 
 func NewModuleFromReader(fileReader io.ReaderAt) *Module {
-	module := newModule()
+	module := newModule(DefaultVerifierBufferSize)
+	module.fileReader = fileReader
+	return module
+}
+
+func NewModuleFromReaderWithLogSize(fileReader io.ReaderAt, logSize int) *Module {
+	module := newModule(logSize)
 	module.fileReader = fileReader
 	return module
 }
