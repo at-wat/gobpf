@@ -22,7 +22,7 @@ import (
 )
 
 /*
-#cgo CFLAGS: -I/usr/include/bcc/compat
+#cgo CFLAGS: -I/opt/datadog-agent/embedded/include/bcc/compat
 #cgo LDFLAGS: -lbcc
 #include <bcc/bcc_common.h>
 #include <bcc/libbpf.h>
