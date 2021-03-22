@@ -25,7 +25,7 @@ import (
 )
 
 /*
-#include "include/bpf.h"
+#include <linux/bpf.h>
 #include <linux/unistd.h>
 
 extern __u64 ptr_to_u64(void *);
@@ -111,6 +111,30 @@ func (b *Module) LookupElement(mp *Map, key, value unsafe.Pointer) error {
 
 	if ret != 0 || err != 0 {
 		return fmt.Errorf("unable to lookup element: %s", err)
+	}
+
+	return nil
+}
+
+// LookupAndDeleteElement picks up and delete the element in the the map stored in mp.
+// The value is stored in the value unsafe.Pointer.
+func (b *Module) LookupAndDeleteElement(mp *Map, value unsafe.Pointer) error {
+	uba := C.union_bpf_attr{}
+	C.create_bpf_lookup_elem(
+		C.int(mp.m.fd),
+		unsafe.Pointer(nil),
+		value,
+		unsafe.Pointer(&uba),
+	)
+	ret, _, err := syscall.Syscall(
+		C.__NR_bpf,
+		C.BPF_MAP_LOOKUP_AND_DELETE_ELEM,
+		uintptr(unsafe.Pointer(&uba)),
+		unsafe.Sizeof(uba),
+	)
+
+	if ret != 0 || err != 0 {
+		return fmt.Errorf("unable to lookup and delete element: %s", err)
 	}
 
 	return nil
