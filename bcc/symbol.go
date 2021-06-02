@@ -22,7 +22,7 @@ import (
 )
 
 /*
-#cgo CFLAGS: -I/usr/include/bcc/compat
+#cgo CFLAGS: -I/opt/datadog-agent/embedded/include/bcc/compat
 #cgo LDFLAGS: -lbcc
 #include <bcc/bcc_common.h>
 #include <bcc/libbpf.h>
@@ -96,6 +96,7 @@ func bccResolveName(module, symname string, pid int) (uint64, error) {
 
 	pidC := C.int(pid)
 	cache := C.bcc_symcache_new(pidC, symbolC)
+	defer C.bcc_free_symcache(cache, pidC)
 
 	moduleCS := C.CString(module)
 	defer C.free(unsafe.Pointer(moduleCS))

@@ -33,13 +33,15 @@ import (
 )
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/include/uapi -I${SRCDIR}/include
+
 #include <unistd.h>
 #include <strings.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include "include/bpf.h"
-#include "include/libbpf.h"
+#include <linux/bpf.h>
+#include "libbpf.h"
 #include <linux/perf_event.h>
 #include <linux/unistd.h>
 #include <sys/socket.h>
@@ -50,9 +52,6 @@ import (
 #include <string.h>
 #include <linux/if_link.h>
 #include <linux/rtnetlink.h>
-
-#include "lib/nlattr.c"
-#include "lib/netlink.c"
 
 static int perf_event_open_tracepoint(int tracepoint_id, int pid, int cpu,
                            int group_fd, unsigned long flags)
@@ -166,6 +165,8 @@ const (
 	SockCreateType
 )
 
+const defaultLogSize uint32 = 524288
+
 // CgroupProgram represents a cgroup skb/sock program
 type CgroupProgram struct {
 	Name  string
@@ -202,10 +203,7 @@ type XDPProgram struct {
 	fd    int
 }
 
-// DefaultVerifierBufferSize is the default size used to initialize the verifier logs buffer
-const DefaultVerifierBufferSize = 524288
-
-func newModule(bufferSize int) *Module {
+func newModule(logSize uint32) *Module {
 	return &Module{
 		probes:             make(map[string]*Kprobe),
 		uprobes:            make(map[string]*Uprobe),
@@ -214,30 +212,32 @@ func newModule(bufferSize int) *Module {
 		tracepointPrograms: make(map[string]*TracepointProgram),
 		schedPrograms:      make(map[string]*SchedProgram),
 		xdpPrograms:        make(map[string]*XDPProgram),
-		log:                make([]byte, bufferSize),
+		log:                make([]byte, logSize),
 	}
 }
 
-func NewModule(fileName string) *Module {
-	module := newModule(DefaultVerifierBufferSize)
+func NewModuleWithLog(fileName string, logSize uint32) *Module {
+
+	module := newModule(logSize)
 	module.fileName = fileName
 	return module
 }
 
-func NewModuleWithLogSize(fileName string, logSize int) *Module {
+func NewModuleFromReaderWithLog(fileReader io.ReaderAt, logSize uint32) *Module {
 	module := newModule(logSize)
+	module.fileReader = fileReader
+	return module
+}
+
+func NewModule(fileName string) *Module {
+
+	module := newModule(defaultLogSize)
 	module.fileName = fileName
 	return module
 }
 
 func NewModuleFromReader(fileReader io.ReaderAt) *Module {
-	module := newModule(DefaultVerifierBufferSize)
-	module.fileReader = fileReader
-	return module
-}
-
-func NewModuleFromReaderWithLogSize(fileReader io.ReaderAt, logSize int) *Module {
-	module := newModule(logSize)
+	module := newModule(defaultLogSize)
 	module.fileReader = fileReader
 	return module
 }
@@ -554,6 +554,15 @@ func (b *Module) AttachXDP(devName string, secName string) error {
 	return nil
 }
 
+// AttachXDPWithFlags attaches an xdp section to a device with flags.
+func (b *Module) AttachXDPWithFlags(devName string, secName string, flags uint32) error {
+	xdp, ok := b.xdpPrograms[secName]
+	if !ok {
+		return fmt.Errorf("no such XDP hook %q", secName)
+	}
+	return attachXDP(devName, xdp.fd, flags, true)
+}
+
 func (b *Module) RemoveXDP(devName string) error {
 	if err := attachXDP(devName, -1, 0, false); err != nil {
 		return err
@@ -861,7 +870,23 @@ func (b *Module) closeMaps(options map[string]CloseOptions) error {
 				return fmt.Errorf("error unpinning map %q: %v", m.Name, err)
 			}
 		}
+
+		// unmap
+		for _, base := range m.bases {
+			err := syscall.Munmap(base)
+			if err != nil {
+				return fmt.Errorf("unmap error: %v", err)
+			}
+		}
+
 		for _, fd := range m.pmuFDs {
+			// disable
+			_, _, err2 := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), C.PERF_EVENT_IOC_DISABLE, 0)
+			if err2 != 0 {
+				return fmt.Errorf("error disabling perf event: %v", err2)
+			}
+
+			// close
 			if err := syscall.Close(int(fd)); err != nil {
 				return fmt.Errorf("error closing perf event fd: %v", err)
 			}
